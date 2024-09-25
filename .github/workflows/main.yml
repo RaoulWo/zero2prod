@@ -1,0 +1,34 @@
+on: [push]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      # Check out the repo onto the runner in order to run scripts/actions
+      # against the code.
+      - uses: actions/checkout@v4
+      # Install a Rust toolchain using rustup. Caches intermediate build
+      # artifacts.
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Run tests
+        run: cargo test
+
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: rustfmt
+      - name: Enforce formatting
+        run: cargo fmt --check
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          components: clippy
+      - name: Run linter
+        run: cargo clippy -- -D warnings
