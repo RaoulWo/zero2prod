@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+
+# Print a trace of commands.
+set -x
+# Exit immediately if a pipeline returns a non-zero status.
+set -e
+# The return value of the pipeline is the value of the last
+# command to exit with a non-zero status or zero if all
+# commands exit successfully.
+set -o pipefail
+
+# Check if psql and sqlx-cli are installed.
+if ! command -v psql >/dev/null 2>&1; then
+  echo "Error: psql is not installed." >&2
+  exit 1
+fi
+
+if ! command -v sqlx >/dev/null 2>&1; then
+  echo "Error: sqlx is not installed." >&2
+  echo "Use:" >&2
+  echo "    cargo install sqlx-cli --no-default-features \
+--features rustls,postgres" >&2
+  echo "to install it." >&2
+  exit 1
+fi
+
+# NOTE: `command -v` is the POSIX compliant way of checking
+# if a given program exists.
+
+DB_USER="${POSTGRES_USER:=postgres}"
+DB_PASSWORD="${POSTGRES_PASSWORD:=password}"
+DB_NAME="${POSTGRES_DB:=newsletter}"
+DB_PORT="${POSTGRES_PORT:=5433}"
+DB_HOST="${POSTGRES_HOST:=localhost}"
+
+# We can run migrations without creating the docker container
+# by setting the `SKIP_DOCKER` variable.
+if [[ -z "$SKIP_DOCKER" ]]; then
+  docker run \
+    -e POSTGRES_USER="$DB_USER" \
+    -e POSTGRES_PASSWORD="$DB_PASSWORD" \
+    -e POSTGRES_DB="$DB_NAME" \
+    --name zero2prod \
+    -p "${DB_PORT}:5432" \
+    -d postgres \
+    postgres -N 1000
+  # ^ Increased maximum number of connections for testing
+  # purposes.
+fi
+
+# psql reads the password from the `PGPASSWORD` variable.
+export PGPASSWORD="$DB_PASSWORD"
+# Wait for the Postgres container to be ready to accept
+# connections.
+until psql -h "$DB_HOST" -p "$DB_PORT" -U "$DB_USER" -c "\q"; do
+  echo "Postgres is still unavailable - sleeping" >&2
+  sleep 1
+done
+echo "Postgres is up and running on port ${DB_PORT}!" >&2
+
+# sqlx expects `DATABASE_URL` to be a valid Postgres
+# connection string.
+export DATABASE_URL="postgres://${DB_USER}:${DB_PASSWORD}@${DB_HOST}:${DB_PORT}/${DB_NAME}"
+sqlx database create
+sqlx migrate run
+
+echo "Postgres has been migrated, ready to go!" >&2

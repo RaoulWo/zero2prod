@@ -1,23 +1,72 @@
 on: [push]
 
+env:
+  CARGO_TERM_COLOR: always
+  SQLX_VERSION: 0.8
+  SQLX_FEATURES: "rustls,postgres"
+  APP_USER: app
+  APP_USER_PASSWORD: secret
+  APP_DB_NAME: newsletter
+
 jobs:
   test:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: password
+          POSTGRES_DB: postgres
+        ports:
+          - 5433:5432
     steps:
       # Check out the repo onto the runner in order to run scripts/actions
       # against the code.
       - uses: actions/checkout@v4
       # Install a Rust toolchain using rustup. Caches intermediate build
       # artifacts.
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli
+          --version=${{ env.SQLX_VERSION }}
+          --features ${{ env.SQLX_FEATURES }}
+          --no-default-features
+          --locked
+        # ^ `--locked` forces cargo to use the packaged `Cargo.lock` file
+        # if available. This can ensure reproducible builds.
+
+      - name: Create app user in postgres
+        run: |
+          sudo apt-get install postgresql-client
+
+          # Create the application user
+          CREATE_QUERY="CREATE USER ${APP_USER} WITH PASSWORD '${APP_USER_PASSWORD}';"
+          PGPASSWORD="password" psql -h "localhost" -U "postgres" -c "$CREATE_QUERY"
+
+          # Grant create db privileges to the app user
+          GRANT_QUERY="ALTER USER ${APP_USER} CREATEDB;"
+          PGPASSWORD="password" psql -h "localhost" -U "postgres" -c "$GRANT_QUERY"
+
+      - name: Migrate database
+        run: |
+          # v `SKIP_DOCKER` skips creating a postgres docker container
+          SKIP_DOCKER=true ./scripts/init_db
+
       - name: Run tests
         run: cargo test
+
+      - name: Check that query metadata is up-to-date
+        run: cargo run sqlx prepare --workspace --check -- --all-targets
 
   format:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt
       - name: Enforce formatting
@@ -27,7 +76,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Install rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: clippy
       - name: Run linter
