@@ -21,13 +21,10 @@ pub struct FormData {
 // NOTE: This technique is similar to what other languages
 // might call *dependency injection*!
 
-// NOTE: We *correlate* all logs (traces) related to the
-// same request using a *request* or *correlation id*.
 #[tracing::instrument(
     name = "adding a new subscriber",
     skip(form, pool),
     fields(
-        request_id = %Uuid::new_v4(),
         subscriber_email = %form.email,
         subscriber_name = %form.name
     )
