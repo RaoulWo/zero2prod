@@ -2,6 +2,11 @@ use actix_web::{web, HttpResponse, Responder};
 use chrono::Utc;
 use sqlx::PgPool;
 use uuid::Uuid;
+// NOTE: `tracing::Instrument` is an extension trait for
+// futures that makes spans interoperate with async code.
+// Anytime a future is polled it enters the corresponding
+// span, when the future is *parked* the span is exited.
+use tracing::Instrument;
 
 #[derive(serde::Deserialize)]
 pub struct FormData {
@@ -22,19 +27,32 @@ pub struct FormData {
 // might call *dependency injection*!
 
 pub async fn subscribe(form: web::Form<FormData>, pool: web::Data<PgPool>) -> impl Responder {
-    // NOTE: We *correlate* all logs related to the same request
-    // using a *request* or *correlation id*.
+    // NOTE: We *correlate* all logs (traces) related to the
+    // same request using a *request* or *correlation id*.
     let request_id = Uuid::new_v4();
-    log::info!(
-        "request_id {} - adding '{}' '{}' as a new subscriber",
-        request_id,
-        form.email,
-        form.name
+    // `tracing::info_span!` creates a span of log-level *info*,
+    // however we still need to explicitly *step into* the span.
+    // Once we do that, all subsequent spans/logs are considered
+    // *children* of this span.
+
+    // NOTE: You can enter/exit spans multiple times, this is handy
+    // for asynchronous tasks for example. Closing is final on the
+    // other hand.
+    let request_span = tracing::info_span!(
+        "adding a new subscriber",
+        // The `tracing` create allows us to associate *structured
+        // information* to spans as key-value pairs. A prefixed `%`
+        // tells `tracing` to use their `Display` trait implementation.
+        %request_id,
+        subscriber_email = %form.email,
+        subscriber_name = %form.name
     );
-    log::info!(
-        "request_id {} - saving new subscriber details in the database",
-        request_id
-    );
+    // RAII pattern, the guard is dropped when it's scope ends.
+    let _request_span_guard = request_span.enter();
+    // This span will be *attached* to the future returned by
+    // `sqlx::query!` which is made possible by the `Future`
+    // extension trait `tracing::Instrument`.
+    let query_span = tracing::info_span!("saving new subscriber details in the database",);
     match sqlx::query!(
         r#"
         INSERT INTO subscriptions (id, email, name, subscribed_at)
@@ -48,21 +66,14 @@ pub async fn subscribe(form: web::Form<FormData>, pool: web::Data<PgPool>) -> im
     // We use `get_ref` to get an immutable ref to `PgPool`
     // which is wrapped by `web::Data`.
     .execute(pool.get_ref())
+    // First we attach the instrumentation, then we `await` it.
+    .instrument(query_span)
     .await
     {
-        Ok(_) => {
-            log::info!(
-                "request_id {} - new subscriber details have been saved",
-                request_id
-            );
-            HttpResponse::Ok()
-        }
+        Ok(_) => HttpResponse::Ok(),
         Err(err) => {
-            log::error!(
-                "request_id {} - failed to execute query: {:?}",
-                request_id,
-                err
-            );
+            // TODO: This log falls outside of `query_span` for now.
+            tracing::error!("failed to execute query: {:?}", err);
             HttpResponse::InternalServerError()
         }
     }

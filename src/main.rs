@@ -1,14 +1,11 @@
-use env_logger::Env;
 use sqlx::PgPool;
 use std::net::TcpListener;
-use zero2prod::{configuration, startup};
+use zero2prod::{configuration, startup, telemetry};
 
 #[tokio::main]
 async fn main() -> Result<(), std::io::Error> {
-    // `env_logger` filters the log levels from the environment
-    // variable `RUST_LOG`. If it isn't set we fall back to logs
-    // of the level *info* or above.
-    env_logger::Builder::from_env(Env::default().default_filter_or("info")).init();
+    let subscriber = telemetry::get_subscriber("zero2prod".into(), "info".into(), std::io::stdout);
+    telemetry::init_subscriber(subscriber);
 
     let configuration = configuration::get_configuration().expect("failed to read configuration");
     let pool = PgPool::connect(&configuration.database.connection_string())
